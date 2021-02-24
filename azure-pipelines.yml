@@ -1,7 +1,7 @@
-# Maven
-# Build your Java project and run tests with Apache Maven.
-# Add steps that analyze code, save build artifacts, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/java
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
 
 
 
@@ -12,24 +12,85 @@ pool:
   vmImage: 'ubuntu-latest'
 
 steps:
-- task: Maven@3
-  displayName: Build with Maven
-  inputs:
-    mavenPomFile: 'pom.xml'
-    mavenOptions: '-Xmx3072m'
-    javaHomeOption: 'JDKVersion'
-    jdkVersionOption: '1.8'
-    jdkArchitectureOption: 'x64'
-    publishJUnitResults: true
-    testResultsFiles: '**/surefire-reports/TEST-*.xml'
-    goals: 'package'
 
-
-- task: Bash@3
-  displayName: Veracode Pipeline
+#Submit DAST Scan to Veracode
+- task: CmdLine@2
+  displayName: VC - Install Veracode Auth
   inputs:
-    targetType: 'inline'
     script: |
-      curl -sSO https://downloads.veracode.com/securityscan/pipeline-scan-LATEST.zip
-      unzip pipeline-scan-LATEST.zip
-      java -jar pipeline-scan.jar -vid $(vid) -vkey $(vkey) -f /home/vsts/work/1/s/target/verademo.war
+      pip install veracode-api-signing
+
+- task: CmdLine@2
+  displayName: VC - Apply Creds
+  inputs:
+    script: |
+      echo [default] >> credentials.txt
+      echo veracode_api_key_id = $(vid) >> credentials.txt
+      echo veracode_api_key_secret = $(vkey) >> credentials.txt
+      mkdir /home/vsts/.veracode/
+      cp credentials.txt /home/vsts/.veracode/credentials
+
+- task: CmdLine@2
+  displayName: VC - Create DA json
+  inputs:
+    script: |
+      echo { >> da_scan.json
+      echo   "name": "Webgoat -  $(build.buildNumber)", >> da_scan.json
+      echo   "scans": [ >> da_scan.json
+      echo     { >> da_scan.json
+      echo       "scan_config_request": { >> da_scan.json
+      echo         "target_url": { >> da_scan.json
+      echo           "url": "http://veracodedemojava/WebGoat", >> da_scan.json
+      echo           "http_and_https": true, >> da_scan.json
+      echo           "directory_restriction_type": "DIRECTORY_AND_SUBDIRECTORY" >> da_scan.json
+      echo         } >> da_scan.json
+      echo       }, >> da_scan.json
+      echo       "internal_scan_configuration": { >> da_scan.json
+      echo         "enabled": true, >> da_scan.json
+      echo         "gateway_id": "Insert ID HERE", >> da_scan.json
+      echo         "endpoint_id": "Insert ID HERE" >> da_scan.json
+      echo       } >> da_scan.json
+      echo     } >> da_scan.json
+      echo   ], >> da_scan.json
+      echo   "schedule": { >> da_scan.json
+      echo     "now": true, >> da_scan.json
+      echo     "duration": { >> da_scan.json
+      echo       "length": 1, >> da_scan.json
+      echo       "unit": "DAY" >> da_scan.json
+      echo     } >> da_scan.json
+      echo   } >> da_scan.json
+      echo } >> da_scan.json
+
+- task: PythonScript@0
+  displayName: VC - kick off DAST scan
+  inputs:
+    scriptSource: 'inline'
+    script: |
+      import sys
+      import json
+      import requests
+      from veracode_api_signing.plugin_requests import RequestsAuthPluginVeracodeHMAC
+      
+      
+      api_base = "https://api.veracode.com/was/configservice/v1"
+      headers = {"User-Agent": "Start DA Scan Example", 'Content-type': 'application/json'}
+      
+      
+      if __name__ == "__main__":
+      
+          try:
+              contents = open('da_scan.json', 'rb').read()
+              print(contents)
+              response = requests.post(api_base + "/analyses", auth=RequestsAuthPluginVeracodeHMAC(), data=contents, headers=headers)
+          except requests.RequestException as e:
+              print("Failed...")
+              print(e)
+              sys.exit(1)
+      
+          if response.ok:
+              print(response.status_code)
+              print(response.content)
+      
+          else:
+              print(response.status_code)
+              print(response.content)
